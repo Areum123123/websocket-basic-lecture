@@ -74,7 +74,7 @@ Nest is [MIT licensed](LICENSE).
 
 ## 웹소켓 강의 따라하기
 
-<메인브랜치>
+<main브랜치>
   
 -닉네임정하기
 
