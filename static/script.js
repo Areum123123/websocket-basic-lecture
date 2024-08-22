@@ -1,55 +1,99 @@
-// socket.io 인스턴스 생성
-const socket = io('http://localhost:3000/chat');
-const roomSocket = io('http://localhost:3000/room');
-const nickname = prompt('닉네임을 입력해주세요');
+const socket = io('http://localhost:3000');
+let currentNickname = '';
 let currentRoom = '';
+let isAgent = false;
 
-// 공지 이벤트를 받아서 처리
-socket.on('notice', (data) => {
-  $('#notice').append(`<div>${data.message}</div>`);
+document.getElementById('customerBtn').addEventListener('click', () => {
+  socket.emit('joinAsCustomer');
+  showChatArea();
+  isAgent = false;
 });
 
-socket.on('connect', () => {
-  console.log('connected'); //서버 접속 확인을 위한 이벤트
+document.getElementById('agentBtn').addEventListener('click', () => {
+  const password = prompt('비밀번호를 입력하세요:');
+  socket.emit('joinAsAgent', { password });
+  isAgent = true;
 });
+
+document.getElementById('sendBtn').addEventListener('click', sendMessage);
+document
+  .getElementById('messageInput')
+  .addEventListener('keypress', function (e) {
+    if (e.key === 'Enter') {
+      sendMessage();
+    }
+  });
 
 function sendMessage() {
-  if (currentRoom === '') {
-    alert('방을 선택해 주세요');
-    return;
+  const message = document.getElementById('messageInput').value;
+  if (message.trim()) {
+    socket.emit('sendMessage', { message, room: currentRoom });
+    document.getElementById('messageInput').value = '';
   }
-  const message = $('#message').val();
-  const data = { message, nickname, room: currentRoom };
-
-  roomSocket.emit('message', data); // 서버로 메시지 전송
-  $('#message').val(''); // 메시지 입력란 초기화
-  return false;
 }
 
-// 채팅방 내에서 대화를 나눌 때 사용하는 이벤트
-roomSocket.on('message', (data) => {
-  $('#chat').append(`<div>${data.message}</div>`); // 방에 전송된 메시지 표시
+socket.on('setNickname', (nickname) => {
+  currentNickname = nickname;
+  alert(`당신의 닉네임은 ${nickname}입니다.`);
 });
 
-// 채팅방 생성 버튼 클릭시 실행하는 함수
-function createRoom() {
-  const room = prompt('생성할 방의 이름을 입력해주세요.');
-  roomSocket.emit('createRoom', { room, nickname });
+socket.on('newMessage', (data) => {
+  appendMessage(data);
+});
+
+socket.on('updateCustomerList', (customers) => {
+  if (isAgent) {
+    document.getElementById('agentArea').style.display = 'block';
+    const customerList = document.getElementById('customerList');
+    customerList.innerHTML = '';
+    customers.forEach((customer) => {
+      const li = document.createElement('li');
+      li.textContent = customer.nickname;
+      if (customer.hasNewMessage) {
+        li.classList.add('new-message');
+      }
+      const replyBtn = document.createElement('button');
+      replyBtn.textContent = 'Reply';
+      replyBtn.onclick = () =>
+        socket.emit('agentReply', { customerId: customer.id });
+      li.appendChild(replyBtn);
+      customerList.appendChild(li);
+    });
+  }
+});
+
+socket.on('joinRoom', (data) => {
+  currentRoom = data.room;
+  showChatArea();
+  if (data.customerNickname) {
+    appendSystemMessage(`${data.customerNickname}와의 채팅방에 입장했습니다.`);
+    document.getElementById('messages').innerHTML = '';
+    data.previousMessages.forEach(appendMessage);
+  }
+});
+
+socket.on('agentJoined', (data) => {
+  currentRoom = data.room;
+  appendSystemMessage('상담원이 채팅방에 입장했습니다.');
+});
+
+socket.on('error', (message) => {
+  alert(message);
+});
+
+function appendMessage(data) {
+  const messageElement = document.createElement('p');
+  messageElement.textContent = `${data.nickname}: ${data.message}`;
+  document.getElementById('messages').appendChild(messageElement);
 }
 
-// 클라이언트 측에서 채팅방 추가하는 함수
-roomSocket.on('rooms', (data) => {
-  $('#rooms').empty(); // 채팅방 목록 초기화
-  data.forEach((room) => {
-    $('#rooms').append(
-      `<li>${room}<button onclick="joinRoom('${room}')">join</button></li>`,
-    );
-  });
-});
+function appendSystemMessage(message) {
+  const messageElement = document.createElement('p');
+  messageElement.textContent = message;
+  messageElement.classList.add('system-message');
+  document.getElementById('messages').appendChild(messageElement);
+}
 
-// 방에 들어갈 때 기존에 있던 방에서는 나가기
-function joinRoom(room) {
-  roomSocket.emit('joinRoom', { room, nickname, toLeaveRoom: currentRoom });
-  $('#chat').html(''); // 채팅방 이동시 기존 메시지 삭제
-  currentRoom = room; // 현재 들어있는 방의 값을 변경
+function showChatArea() {
+  document.getElementById('chatArea').style.display = 'block';
 }

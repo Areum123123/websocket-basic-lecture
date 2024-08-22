@@ -1,63 +1,91 @@
 import {
-  MessageBody,
-  SubscribeMessage,
   WebSocketGateway,
+  SubscribeMessage,
+  MessageBody,
   WebSocketServer,
+  ConnectedSocket,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 
-@WebSocketGateway({ namespace: 'chat' }) // 웹소켓 서버 설정 데코레이터: 네임스페이스 추가
+@WebSocketGateway()
 export class ChatGateway {
-  @WebSocketServer() server: Server; // 웹소켓 서버 인스턴스 선언
-
-  @SubscribeMessage('message') // message 이벤트 구독
-  handleMessage(socket: Socket, data: any): void {
-    const { message, nickname } = data; // 메시지와 닉네임을 데이터에서 추출
-    // 접속한 클라이언트들에 메시지 전송
-    socket.broadcast.emit('message', `${nickname}: ${message}`);
-  }
-}
-
-@WebSocketGateway({ namespace: 'room' })
-export class RoomGateway {
-  // 채팅 게이트웨이 의존성 주입
-  constructor(private readonly chatGateway: ChatGateway) {}
-  rooms = [];
-
   @WebSocketServer()
   server: Server;
 
-  @SubscribeMessage('createRoom')
-  handleMessage(@MessageBody() data) {
-    const { nickname, room } = data;
-    // 방 생성시 이벤트 발생시켜 클라이언트에 송신
-    this.chatGateway.server.emit('notice', {
-      message: `${nickname}님이 ${room}방을 만들었습니다.`,
-    });
-    this.rooms.push(room); // 채팅방 정보 받아서 추가
-    this.server.emit('rooms', this.rooms); // rooms 이벤트로 채팅방 리스트 전송
+  private customers: Map<string, string> = new Map(); // 소켓 ID to 닉네임
+  private agents: Set<string> = new Set(); // 에이전트 소켓 ID
+  private messages: Map<string, Array<{ nickname: string; message: string }>> =
+    new Map(); // 고객 ID to 메시지 배열
+
+  @SubscribeMessage('joinAsCustomer')
+  handleCustomerJoin(@ConnectedSocket() client: Socket): void {
+    const nickname = `고객${Math.floor(Math.random() * 1000)}`;
+    this.customers.set(client.id, nickname);
+    this.messages.set(client.id, []);
+    client.emit('setNickname', nickname);
+    this.updateAgentCustomerList();
   }
 
-  @SubscribeMessage('joinRoom')
-  handleJoinRoom(socket: Socket, data) {
-    const { nickname, room, toLeaveRoom } = data;
-    if (toLeaveRoom) {
-      socket.leave(toLeaveRoom); // 이전 방에서 나가기
+  @SubscribeMessage('joinAsAgent')
+  handleAgentJoin(
+    @MessageBody() data: { password: string },
+    @ConnectedSocket() client: Socket,
+  ): void {
+    if (data.password === '1234') {
+      this.agents.add(client.id);
+      this.updateAgentCustomerList();
+    } else {
+      client.emit('error', '잘못된 비밀번호입니다.');
     }
-    socket.join(room); // 새로운 방에 입장
-
-    this.chatGateway.server.emit('notice', {
-      message: `${nickname}님이 ${room}방에 입장했습니다.`,
-    });
   }
 
-  @SubscribeMessage('message')
-  handleMessageToRoom(socket: Socket, data) {
-    const { nickname, room, message } = data;
-    console.log(data);
-    // 방에 있는 모든 클라이언트에게 메시지 전송 (자신 포함)
-    this.server.to(room).emit('message', {
-      message: `${nickname}: ${message}`,
-    });
+  @SubscribeMessage('sendMessage')
+  handleMessage(
+    @MessageBody() data: { message: string; room?: string },
+    @ConnectedSocket() client: Socket,
+  ): void {
+    const nickname = this.customers.get(client.id) || 'Agent';
+    const messageData = { nickname, message: data.message };
+    if (data.room) {
+      this.server.to(data.room).emit('newMessage', messageData);
+      const customerId = data.room.split('_')[1];
+      this.messages.get(customerId)?.push(messageData);
+    } else if (this.customers.has(client.id)) {
+      this.messages.get(client.id)?.push(messageData);
+      client.emit('newMessage', messageData); // 메시지를 보낸 고객에게만 전송
+      this.updateAgentCustomerList(); // 상담원에게 새 메시지 알림
+    }
+  }
+
+  @SubscribeMessage('agentReply')
+  handleAgentReply(
+    @MessageBody() data: { customerId: string },
+    @ConnectedSocket() client: Socket,
+  ): void {
+    if (this.agents.has(client.id)) {
+      const customerSocket = this.server.sockets.sockets.get(data.customerId);
+      if (customerSocket) {
+        const room = `room_${data.customerId}`;
+        client.join(room);
+        customerSocket.join(room);
+        const customerNickname = this.customers.get(data.customerId);
+        const previousMessages = this.messages.get(data.customerId) || [];
+        client.emit('joinRoom', { room, customerNickname, previousMessages });
+        customerSocket.emit('agentJoined', { room });
+      }
+    }
+  }
+
+  private updateAgentCustomerList(): void {
+    const customerList = Array.from(this.customers.entries()).map(
+      ([id, nickname]) => ({
+        id,
+        nickname,
+        hasNewMessage: this.messages.get(id)?.length > 0,
+      }),
+    );
+    this.server
+      .to(Array.from(this.agents))
+      .emit('updateCustomerList', customerList);
   }
 }
