@@ -74,7 +74,7 @@ Nest is [MIT licensed](LICENSE).
 
 ## 웹소켓 강의 따라하기
 
-<Branch Main>
+<메인브랜치>
   
 -닉네임정하기
 
@@ -82,7 +82,7 @@ Nest is [MIT licensed](LICENSE).
 
 -실시간 채팅
 
-<Branch Dev>
+<dev브랜치>
   
 -사용자는 채팅방에 입장해서 문의를 한다(닉네임은 고객432<고객랜덤번호>)
 
